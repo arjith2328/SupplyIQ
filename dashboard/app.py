@@ -10,6 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import os
 import sys
+import json
 
 # Add parent directory to path so we can import sql queries
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -54,7 +55,6 @@ def load_base_data():
         return pd.DataFrame(), pd.DataFrame()
     conn = sqlite3.connect(db_path)
     
-    # Load basic order data for filtering
     query_orders = "SELECT order_id, customer_id, order_status, date(order_purchase_timestamp) as order_date FROM olist_orders_dataset WHERE order_status != 'canceled'"
     df_o = pd.read_sql_query(query_orders, conn)
     
@@ -69,7 +69,6 @@ df_orders, df_items = load_base_data()
 
 # --- Sidebar ---
 st.sidebar.title("SupplyIQ 📈")
-st.sidebar.markdown("Demand Forecasting & Supply Chain Optimization")
 page = st.sidebar.radio("Navigation", ["KPI Overview", "Demand Forecasting", "Anomaly Detection", "SQL Insights"])
 
 if not df_orders.empty:
@@ -84,7 +83,6 @@ if page == "KPI Overview":
     if df_orders.empty:
         st.warning("Database not found or empty. Please run sql/setup_db.py first after adding data to data/ folder.")
     else:
-        # Filter data based on date range
         mask = (df_orders['order_date'].dt.date >= date_range[0]) & (df_orders['order_date'].dt.date <= date_range[1])
         filtered_orders = df_orders.loc[mask]
         merged_df = pd.merge(filtered_orders, df_items, on='order_id', how='inner')
@@ -109,51 +107,74 @@ if page == "KPI Overview":
 # --- Demand Forecasting ---
 elif page == "Demand Forecasting":
     st.title("Demand Forecasting")
-    st.markdown("Comparing XGBoost, Prophet, and LSTM models for the last 30 days of available data.")
     
-    img_path = "outputs/forecast_comparison.png"
-    if os.path.exists(img_path):
-        st.image(img_path, caption="Actual vs Predicted Demand")
-        
-        st.info("The forecasting pipeline automatically selects the best model based on Mean Absolute Percentage Error (MAPE) and saves it to the `outputs` directory.")
-        
-        if os.path.exists("outputs/best_forecast_model.pkl"):
-            st.success("Best Model: XGBoost or Prophet (.pkl detected)")
-        elif os.path.exists("outputs/best_forecast_model.h5"):
-            st.success("Best Model: LSTM (.h5 detected)")
+    csv_path = "outputs/forecast_results.csv"
+    json_path = "outputs/forecast_metrics.json"
+    
+    if os.path.exists(csv_path) and os.path.exists(json_path):
+        df_forecast = pd.read_csv(csv_path)
+        with open(json_path, 'r') as f:
+            metrics = json.load(f)
             
+        c1, c2, c3 = st.columns(3)
+        c1.metric("RMSE", metrics.get("RMSE", "N/A"))
+        c2.metric("MAE", metrics.get("MAE", "N/A"))
+        c3.metric("MAPE", f'{metrics.get("MAPE", "N/A")}%')
+        
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_forecast['date'], y=df_forecast['actual'], name='Actual', mode='lines+markers', marker_color='cyan'))
+        fig.add_trace(go.Scatter(x=df_forecast['date'], y=df_forecast['predicted'], name='Predicted', mode='lines+markers', marker_color='orange'))
+        fig.update_layout(title="Demand Forecasting: Actual vs Predicted", template="plotly_dark", hovermode="x unified")
+        st.plotly_chart(fig, use_container_width=True)
+        
     else:
-        st.warning("Forecasting output not found. Please run models/forecasting.py.")
+        st.warning("Please run this command in terminal: `python models/forecasting.py`")
 
 # --- Anomaly Detection ---
 elif page == "Anomaly Detection":
     st.title("Anomaly Detection")
-    st.markdown("Detecting unusual spikes or drops in demand using **Isolation Forest** and **Autoencoders**.")
     
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### Isolation Forest Anomalies")
-        if os.path.exists("outputs/anomalies_isolation_forest.png"):
-            st.image("outputs/anomalies_isolation_forest.png")
-        else:
-            st.warning("Plot not found.")
+    if_path = "outputs/anomaly_isolation.csv"
+    ae_path = "outputs/anomaly_autoencoder.csv"
+    
+    if os.path.exists(if_path) and os.path.exists(ae_path):
+        df_if = pd.read_csv(if_path)
+        df_ae = pd.read_csv(ae_path)
+        
+        c1, c2 = st.columns(2)
+        c1.metric("Anomalies (Isolation Forest)", df_if['is_anomaly'].sum())
+        c2.metric("Anomalies (Autoencoder)", df_ae['is_anomaly'].sum())
+        
+        st.markdown("### Isolation Forest Results")
+        fig1 = go.Figure()
+        normal_if = df_if[df_if['is_anomaly'] == 0]
+        anomalies_if = df_if[df_if['is_anomaly'] == 1]
+        fig1.add_trace(go.Scatter(x=normal_if['date'], y=normal_if['value'], name='Normal', mode='markers+lines', line=dict(color='blue', width=1), marker=dict(color='blue', size=4)))
+        fig1.add_trace(go.Scatter(x=anomalies_if['date'], y=anomalies_if['value'], name='Anomaly', mode='markers', marker=dict(color='red', size=10)))
+        fig1.update_layout(template="plotly_dark", hovermode="x unified")
+        st.plotly_chart(fig1, use_container_width=True)
+        
+        st.markdown("#### Top 10 Anomalous Values (Isolation Forest)")
+        st.dataframe(anomalies_if.sort_values(by='value', ascending=False).head(10)[['date', 'value']])
+        
+        st.markdown("### Autoencoder Results")
+        fig2 = go.Figure()
+        normal_ae = df_ae[df_ae['is_anomaly'] == 0]
+        anomalies_ae = df_ae[df_ae['is_anomaly'] == 1]
+        fig2.add_trace(go.Scatter(x=normal_ae['date'], y=normal_ae['value'], name='Normal', mode='markers+lines', line=dict(color='blue', width=1), marker=dict(color='blue', size=4)))
+        fig2.add_trace(go.Scatter(x=anomalies_ae['date'], y=anomalies_ae['value'], name='Anomaly', mode='markers', marker=dict(color='red', size=10)))
+        fig2.update_layout(template="plotly_dark", hovermode="x unified")
+        st.plotly_chart(fig2, use_container_width=True)
+        
+        st.markdown("#### Top 10 Anomalous Values (Autoencoder)")
+        st.dataframe(anomalies_ae.sort_values(by='value', ascending=False).head(10)[['date', 'value']])
             
-    with col2:
-        st.markdown("### Autoencoder Anomalies")
-        if os.path.exists("outputs/anomalies_autoencoder.png"):
-            st.image("outputs/anomalies_autoencoder.png")
-        else:
-            st.warning("Plot not found.")
-            
-    if os.path.exists("outputs/anomaly_summary.csv"):
-        st.markdown("### Detected Anomalies Data")
-        df_anomalies = pd.read_csv("outputs/anomaly_summary.csv")
-        st.dataframe(df_anomalies, use_container_width=True)
+    else:
+        st.warning("Please run this command in terminal: `python models/anomaly.py`")
 
 # --- SQL Insights ---
 elif page == "SQL Insights":
     st.title("SQL Insights")
-    st.markdown("Complex query results powering our data warehouse.")
     
     if not os.path.exists("outputs/supplyiq.db"):
         st.warning("Database not found.")
@@ -189,6 +210,3 @@ elif page == "SQL Insights":
                 st.dataframe(df_ful)
             except Exception as e:
                 st.error("Error executing query.")
-
-st.sidebar.markdown("---")
-st.sidebar.info("Developed as part of the WWT Data Science Internship Application Project: SupplyIQ.")
