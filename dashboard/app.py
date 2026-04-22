@@ -25,6 +25,27 @@ except ImportError:
 
 st.set_page_config(page_title="SupplyIQ Dashboard", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
 
+import subprocess
+
+def run_setup_if_needed():
+    db_missing = not os.path.exists("outputs/supplyiq.db")
+    forecast_missing = not os.path.exists("outputs/forecast_results.csv")
+    anomaly_missing = not os.path.exists("outputs/anomaly_isolation.csv")
+    
+    if db_missing or forecast_missing or anomaly_missing:
+        with st.spinner("Setting up for first time... Please wait 2-3 minutes"):
+            os.makedirs("outputs", exist_ok=True)
+            if db_missing:
+                subprocess.run([sys.executable, "sql/setup_db.py"], check=True)
+            if forecast_missing:
+                subprocess.run([sys.executable, "models/forecasting.py"], check=True)
+            if anomaly_missing:
+                subprocess.run([sys.executable, "models/anomaly.py"], check=True)
+        st.success("Setup complete! Initializing dashboard...")
+        st.rerun()
+
+run_setup_if_needed()
+
 # --- Custom Styling for Dark Theme & Professional UI ---
 st.markdown("""
 <style>

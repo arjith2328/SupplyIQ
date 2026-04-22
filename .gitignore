@@ -16,8 +16,10 @@ __pycache__/
 .ipynb_checkpoints
 
 # Data and Outputs
-data/
 outputs/
+# Allow tracking of CSV data files for Streamlit Cloud deployment
+data/*
+!data/*.csv
 *.pkl
 *.h5
 *.db
